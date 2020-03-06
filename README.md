@@ -32,7 +32,7 @@ Windows环境下通过命令行输入ipconfig，Linux环境下通过cat /etc/res
 需要面对高并发用户，大流量访问。举个例子，去往迪拜的飞机有200张票，但是有100w人都挤进系统买票，如何让这100w人能够看到票务的实时更新，以及顺利的买到一张票，都是一个网站架构师应该考虑的问题。
 这也许对于淘宝的“双十一”1000w的一分钟独立访问用户量来说，是个微不足道的数字，但是对于用户的体验以及网站的口碑来说，都是一项不小的挑战。  
 #### 高可用  
-相对于高并发来说，高可用并不是一个比较有规律的参数，7*24 是每个网站的梦想，但是你并不知道，在某一刻，他就没理由的宕机了。  
+相对于高并发来说，高可用并不是一个比较有规律的参数，7*24 是每个网站的梦想，但是你并不知道，在某一刻，它就没理由的宕机了。  
 #### 海量数据  
 存储、管理海量的数据，需要使用大量的服务器。FaceBook每周上传的照片接近10亿，没有一个大型的存储服务器的支撑，相信用户量不会一直飙升。  
 #### 用户分布广泛，网络情况复杂  
@@ -168,6 +168,121 @@ LVS/HaProxy/Nginx: 摘除故障节点
 包括代码和人员的备份。代码主要提交到代码仓库进行管理和备份，代码仓库至少应该具备多版本的功能。人员备份指的是一个系统至少应该有两名开发人员是了解的。  
 
 --- 
+
+### 环境与工具准备  
+
+#### 环境
+CentOS 7.0 64位以上 + 一台外网服务器 + 一个域名 + CDN内容分发，电脑配置16g以上内存  
+
+CentOS7 关闭防火墙  
+```
+# 临时关闭
+systemctl stop firewalld
+# 禁止开机启动
+systemctl disable firewalld
+
+removed symlink /etc/systemd/system/multi-user.target.wants/firewalld.service
+removed symlink /etc/systemd/system/dbus-org.fedoraproject.FirewallD1.service
+```
+
+#### 外网映射工具  
+在做微信开发或者是对接第三方支付接口时，回调接口可能需要外网访问。  
+这时候开发者在本地测试的时候，需要用到外网测试工具。  
+常用的外网测试工具有natapp、ngrok  
+
+- NatApp，[官网地址](https://natapp.cn)  
+[使用教程](https://natapp.cn/article/nohup)  
+
+```
+cd /usr/local/natapp
+chmod a+x natapp
+
+./natapp -authtoken=xxxx
+```
+
+--- 
+
+### Nginx   
+
+Nginx是一款轻量级的Web服务器/反向代理服务器及电子邮件(IMAP/POP3)代理服务器，并在一个BSD-like协议下发行。
+由俄罗斯的程序设计师Igor Sysoev所开发，供俄国大型的入口网站及搜索引擎Rambler(俄文：Рамблер)使用。
+其特点是占有内存少，并发能力强，事实上nginx的并发能力确实在同类型的网页服务器中表现较好.中国大陆使用nginx网站用户有：新浪、网易、 腾讯等。  
+Nginx是一个高性能的Web和反向代理服务器, 它具有有很多非常优越的特性:  
+作为Web服务器：相比 Apache，Nginx 使用更少的资源，支持更多的并发连接，体现更高的效率，这点使Nginx尤其受到虚拟主机提供商的欢迎。能够支持高达 50,000 个并发连接数的响应，感谢 Nginx 为我们选择了 epoll and kqueue 作为开发模型。  
+作为负载均衡服务器：Nginx 既可以在内部直接支持 Rails 和 PHP，也可以支持作为 HTTP代理服务器 对外进行服务。Nginx 用 C 编写, 不论是系统资源开销还是 CPU 使用效率都比 Perlbal 要好的多。  
+作为邮件代理服务器: Nginx 同时也是一个非常优秀的邮件代理服务器（最早开发这个产品的目的之一也是作为邮件代理服务器），Last.fm 描述了成功并且美妙的使用经验。  
+
+Nginx 安装非常的简单，配置文件 非常简洁（还能够支持perl语法），Bugs非常少的服务器: Nginx 启动特别容易，并且几乎可以做到7*24不间断运行，即使运行数个月也不需要重新启动。你还能够在不间断服务的情况下进行软件版本的升级。  
+Nginx一般用户七层负载均衡，其吞吐量有一定的限制。为了提高整体的吞吐量，会在DNS和Nginx之间引入LVS（软件负载均衡器）、F5（硬负载均衡器）可以做四层负载均衡，首先DNS解析到LVS(F5)，然后LVS(F5)转发给Nginx，再由Nginx转发给真实的服务器  
+
+#### Nginx安装  
+[Nginx下载地址](http://nginx.org/download/)  
+[PCRE下载地址](http://jaist.dl.sourceforge.net/project/pcre/pcre/)  
+[安装文档](https://github.com/ymdx0610/ymdx-software-installation/wiki/Centos7下安装Nginx)  
+
+#### Nginx应用场景
+1. http服务器：Nginx是一个http服务可以独立提供http服务。可以做网页静态服务器。  
+2. 虚拟主机：可以实现在一台服务器虚拟出多个网站，例如个人网站使用的虚拟机。  
+3. 反向代理，负载均衡：当网站的访问量达到一定程度后，单台服务器不能满足用户的请求时，需要用多台服务器集群可以使用nginx做反向代理。并且多台服务器可以平均分担负载，不会应为某台服务器负载高宕机而某台服务器闲置的情况。  
+4. Nginx中也可以配置安全管理、比如可以使用Nginx搭建API接口网关，对每个接口服务进行拦截。  
+
+#### Nginx目录结构
+``` 
+[root@localhost nginx]# ll /opt/download/nginx-1.9.9
+总用量 656
+drwxr-xr-x. 6 es   es     4096 3月   6 15:25 auto
+-rw-r--r--. 1 es   es   256752 12月  9 2015 CHANGES
+-rw-r--r--. 1 es   es   390572 12月  9 2015 CHANGES.ru
+drwxr-xr-x. 2 es   es      168 3月   6 15:25 conf
+-rwxr-xr-x. 1 es   es     2481 12月  9 2015 configure
+drwxr-xr-x. 4 es   es       72 3月   6 15:25 contrib
+drwxr-xr-x. 2 es   es       40 3月   6 15:25 html
+-rw-r--r--. 1 es   es     1397 12月  9 2015 LICENSE
+-rw-r--r--. 1 root root    358 3月   6 15:25 Makefile
+drwxr-xr-x. 2 es   es       21 3月   6 15:25 man
+drwxr-xr-x. 3 root root    174 3月   6 15:26 objs
+-rw-r--r--. 1 es   es       49 12月  9 2015 README
+drwxr-xr-x. 9 es   es       91 3月   6 15:25 src
+```
+- src目录：存放Nginx源码  
+- man目录：存放Nginx帮助手册  
+- html目录：存放默认网站文件  
+- contrib目录：存放其他机构或组织贡献的代码  
+- conf目录：存放Nginx服务器的配置文件  
+- auto目录：存放大量的脚本文件，和configure脚本程序相关  
+- configure文件：Nginx自动安装脚本，用于检查环境，生成编译代码需要的makefile文件  
+- CHANGES、CHANGES.ru、LICENSE和README都是Nginx服务器的相关文档资料。  
+
+安装后：  
+```
+Nginx_
+|_  xx_temp  临时文件目录
+|_  conf     配置目录
+|_  html     静态页面目录
+|_  logs     日志目录
+|_  sbin     主程序目录
+```
+
+#### Nginx静态资源
+静态资源访问存放在nginx的html目录  
+
+#### Nginx虚拟主机配置
+1. 基于域名的虚拟主机，通过域名来区分虚拟主机——应用：外部网站  
+2. 基于端口的虚拟主机，通过端口来区分虚拟主机——应用：公司内部网站，外部网站的管理后台  
+3. 基于IP的虚拟主机，几乎不用。  
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
