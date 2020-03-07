@@ -266,10 +266,192 @@ Nginx_
 #### Nginx静态资源
 静态资源访问存放在nginx的html目录  
 
-#### Nginx虚拟主机配置
+#### Nginx配置虚拟主机
 1. 基于域名的虚拟主机，通过域名来区分虚拟主机——应用：外部网站  
 2. 基于端口的虚拟主机，通过端口来区分虚拟主机——应用：公司内部网站，外部网站的管理后台  
 3. 基于IP的虚拟主机，几乎不用。  
+
+- 基于域名的虚拟主机  
+实战目标：  
+1. 浏览器访问www.ymdx.com，将访问nginx/data/www下资源文件  
+2. 浏览器访问bbs.ymdx.com，将访问nginx/data/bbs下资源文件  
+```
+# 本机修改hosts文件，添加如下配置，其中172.16.49.131为装有nginx的虚拟主机IP地址
+172.16.49.131 www.ymdx.com
+172.16.49.131 bbs.ymdx.com
+
+# 在172.16.49.131虚机上做如下操作
+
+$ cd /opt/app/nginx/
+# 创建目录
+$ mkdir -p data/www data/bbs
+
+
+$ cd html/
+$ cp * ../data/www/
+$ cp * ../data/bbs/
+
+# 分别进入../data/www/和../data/bbs/目录，编辑index文件做展示区分
+$ vim ../data/www/index.html  # Welcome to Ymdx-www!
+$ vim ../data/bbs/index.html  # Welcome to Ymdx-bbs!
+
+# 修改配置文件
+$ vim conf/nginx.conf
+
+# 配置如下：
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    location /{
+       root data/www;
+       index index.html index.htm;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+       root root/www;
+    }
+}
+server{
+    listen 80;
+    server_name bbs.ymdx.com;
+
+    location /{
+       root data/bbs;
+       index index.html index.htm;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+       root data/bbs;
+    }
+}
+
+# 验证配置是否正确
+$ /opt/app/nginx/sbin/nginx -t
+
+# 启动nginx
+$ /opt/app/nginx/sbin/nginx
+
+# 浏览器查看效果
+http://www.ymdx.com/
+http://bbs.ymdx.com/
+```
+
+- 基于端口的虚拟主机  
+实战目标：  
+1. 浏览器访问www.ymdx.com:8080，将访问nginx/data/www下资源文件  
+2. 浏览器访问www.ymdx.com:8081，将访问nginx/data/bbs下资源文件  
+```
+# 配置如下：
+server{
+    listen 8080;
+    server_name www.ymdx.com;
+
+    location /{
+       root data/www;
+       index index.html index.htm;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+       root root/www;
+    }
+}
+server{
+    listen 8081;
+    server_name www.ymdx.com;
+
+    location /{
+       root data/bbs;
+       index index.html index.htm;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+       root data/bbs;
+    }
+}
+
+# 验证配置是否正确
+$ /opt/app/nginx/sbin/nginx -t
+
+# 重新载入配置文件
+/opt/app/nginx/sbin/nginx -s reload
+
+# 开发端口号
+$ firewall-cmd --permanent --zone=public --add-port=8080/tcp
+$ firewall-cmd --permanent --zone=public --add-port=8081/tcp
+$ firewall-cmd --reload
+
+# 浏览器查看效果
+http://www.ymdx.com:8080/
+http://www.ymdx.com:8081/
+```
+
+#### Nginx配置反向代理
+反向代理（Reverse Proxy）方式是指以代理服务器来接受internet上的连接请求，然后将请求转发给内部网络上的服务器，
+并将从服务器上得到的结果返回给internet上请求连接的客户端，此时代理服务器对外就表现为一个反向代理服务器。  
+
+- 反向代理的好处  
+反向代理的好处隐藏真实内部ip地址，请求先访问nginx代理服务器（外网可以访问到）,在使用nginx服务器转发到真实服务器中。  
+
+实战步骤与目标：  
+本地192.168.1.101启动两个SpringBoot应用，端口分别为8080和8081
+1. 浏览器访问http://www.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8080  
+2. 浏览器访问http://bbs.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8081  
+
+```
+# 配置如下：
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    location /{
+       proxy_pass http://192.168.1.101:8080;
+       index index.html index.htm;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+       root root/www;
+    }
+}
+server{
+    listen 80;
+    server_name bbs.ymdx.com;
+
+    location /{
+       proxy_pass http://192.168.1.101:8081;
+       index index.html index.htm;
+    }
+
+    error_page   500 502 503 504  /50x.html;
+    location = /50x.html {
+       root data/bbs;
+    }
+}
+
+# 验证配置是否正确
+$ /opt/app/nginx/sbin/nginx -t
+
+# 重新载入配置文件
+/opt/app/nginx/sbin/nginx -s reload
+
+# 浏览器查看效果
+http://www.ymdx.com/
+http://bbs.ymdx.com/
+```
+
+
+
+
+
+
+
+
+
 
 
 
