@@ -1,4 +1,4 @@
-## 义码当仙之高并发与高可用用实战（基于Nginx）
+## 义码当仙之高并发与高可用用实战（Nginx篇）
 
 ### DNS域名解析  
 整个过程大体描述如下，其中前2个步骤是在本机完成的，后8个步骤涉及到真正的域名解析服务器：  
@@ -303,7 +303,7 @@ server{
     listen 80;
     server_name www.ymdx.com;
 
-    location /{
+    location / {
        root data/www;
        index index.html index.htm;
     }
@@ -317,7 +317,7 @@ server{
     listen 80;
     server_name bbs.ymdx.com;
 
-    location /{
+    location / {
        root data/bbs;
        index index.html index.htm;
     }
@@ -349,7 +349,7 @@ server{
     listen 8080;
     server_name www.ymdx.com;
 
-    location /{
+    location / {
        root data/www;
        index index.html index.htm;
     }
@@ -363,7 +363,7 @@ server{
     listen 8081;
     server_name www.ymdx.com;
 
-    location /{
+    location / {
        root data/bbs;
        index index.html index.htm;
     }
@@ -399,8 +399,8 @@ http://www.ymdx.com:8081/
 
 实战步骤与目标：  
 本地192.168.1.101启动两个SpringBoot应用，端口分别为8080和8081
-1. 浏览器访问http://www.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8080  
-2. 浏览器访问http://bbs.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8081  
+1. 浏览器访问www.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8080  
+2. 浏览器访问bbs.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8081  
 
 ```
 # 配置如下：
@@ -408,7 +408,7 @@ server{
     listen 80;
     server_name www.ymdx.com;
 
-    location /{
+    location / {
        proxy_pass http://192.168.1.101:8080;
        index index.html index.htm;
     }
@@ -422,7 +422,7 @@ server{
     listen 80;
     server_name bbs.ymdx.com;
 
-    location /{
+    location / {
        proxy_pass http://192.168.1.101:8081;
        index index.html index.htm;
     }
@@ -443,6 +443,305 @@ $ /opt/app/nginx/sbin/nginx -t
 http://www.ymdx.com/
 http://bbs.ymdx.com/
 ```
+
+#### Location正则表达式  
+- location的作用  
+根据用户请求的URI来执行不同的应用，也就是根据用户请求的网站URL进行匹配，匹配成功即进行相关的操作。  
+
+- location的语法  
+
+|||
+|:----|:----|
+|=|表示精确匹配|  
+|^~|表示uri以某个常规字符串开头，不是正则匹配| 
+|~|表示区分大小写的正则匹配| 
+|~*|表示不区分大小写的正则匹配|
+|/|通用匹配, 如果没有其它匹配，任何请求都会匹配到|
+
+- location正则案例  
+```
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    # 匹配所有以/开头的请求
+    location / {
+       root html;
+       index index.html index.htm;
+    }
+}
+```
+```
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    # 精确匹配，/后面不能带任何字符
+    location =/ {
+       root html;
+       index index.html index.htm;
+    }
+}
+```
+nginx location配置，默认开启不区分大小写  
+实战目标：根据域名相同，项目名不同，跳转到不同的真实的服务器  
+```
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    # 匹配以/ymdx_8080开头的请求，反向代理至192.168.1.101:8080
+    location /ymdx_8080/ {
+       proxy_pass http://192.168.1.101:8080/;
+       index index.html index.htm;
+    }
+    
+    # 匹配以/ymdx_8081开头的请求，反向代理至192.168.1.101:8080
+    location /ymdx_8081/ {
+       proxy_pass http://192.168.1.101:8081/;
+       index index.html index.htm;
+    }
+}
+```
+
+#### 负载均衡  
+
+-  负载均衡作用  
+建立在现有网络结构之上，它提供了一种廉价有效透明的方法扩展网络设备和服务器的带宽、增加吞吐量、加强网络数据处理能力、提高网络的灵活性和可用性。  
+负载均衡，英文名称为Load Balance，其意思就是分摊到多个操作单元上进行执行，例如Web服务器、FTP服务器、企业关键应用服务器和其它关键任务服务器等，从而共同完成工作任务。  
+负载均衡就是将所有请求先到负载均衡器，在由负载均衡器采用负载均衡算法（轮询、IP绑定、权重）分发到不同实际的服务器中，这也就是服务器集群，集群的目的是为了减轻单台服务器压力。  
+
+- 负载均衡的缺点  
+使用负载均衡后，实际用到的服务器会被集群多台，那么这时候就会产生很多分布式相关问题。  
+比如：  
+分布式Session一致性问题；  
+分布式定时任务调度幂等性问题；  
+分布式生成全局订单ID；  
+分布式锁；  
+分布式配置中心；  
+分布式日志收集；  
+
+- 网络模型图  
+
+|OSI中的层|功能|TCP/IP协议族|
+|:----|:----|:----|
+|应用层|文件传输，电子邮件，文件服务，虚拟终端|TFTP,HTTP,SNMP,FTP,SMTP,DNS,RIP,Telnet|
+|表示层|数据格式化，代码转换，数据加密|没有协议|
+|会话层|解除或建立与别的接点的联系|没有协议|
+|传输层|提供端对端的接口|TCP,UDP|
+|网络层|为数据包选择路由|IP,ICMP,OSPF,BGP,IGMP,ARP,RARP|
+|数据链路层|传输有地址的桢以及错误检测功能|SLIP,CSLIP,PPP,MTU,ARP,RARP|
+|物理层|以二进制数据形式在物理媒体上传输数据|ISO2110,IEEE802,IEEE802.2|
+
+- 四层和七层负载均衡的区别  
+四层负载均衡，在网络模型中的传输层中，基于主要是基于tcp协议报文实现负载均衡（比如LVS、haproxy就是四层负载均衡器），使用改写报文的源地址和目的地址。  
+七层负载均衡，在网络模型中应用层中，基于URL或者HTTP协议实现负载均衡，Web服务器。  
+
+- Upstream Server 负载均衡  
+Upstream Server 中文翻译为上游服务器，意思就是负载均衡服务器设置，白话文表示就是被nginx代理最后真实访问的服务器。  
+负载均衡算法：配置多个上游服务器（真实业务逻辑访问的服务器）的负载均衡机制  
+失败重试机制：当上游服务器（真实业务逻辑访问的服务器）出现超时或者服务器不存活，是否考虑重试机制（补偿机制）  
+服务器心跳检测: 当上游服务器（真实业务逻辑访问的服务器），监控检测|心跳检测  
+
+- Nginx配置负载均衡  
+Nginx负载均衡提供上游服务器（真实业务逻辑访问的服务器），负载均衡、故障转移、失败重试、容错、健康检查等。  
+当上游服务器（真实业务逻辑访问的服务器）发生故障时，可以转移到其他上游服务器（真实业务逻辑访问的服务器）。  
+
+- 负载均衡算法  
+1、轮询（默认）  
+每个请求按时间顺序逐一分配到不同的后端服务，如果后端某台服务器死机，自动剔除故障系统，使用户访问不受影响。  
+2、weight（轮询权值）  
+weight的值越大分配到的访问概率越高，主要用于后端每台服务器性能不均衡的情况下。或者仅仅为在主从的情况下设置不同的权值，达到合理有效的地利用主机资源。  
+3、ip_hash  
+每个请求按访问IP的哈希结果分配，使来自同一个IP的访客固定访问一台后端服务器，并且可以有效解决动态网页存在的session共享问题。俗称IP绑定。  
+4、fair（第三方）  
+比 weight、ip_hash 更加智能的负载均衡算法，fair算法可以根据页面大小和加载时间长短智能地进行负载均衡，也就是根据后端服务器的响应时间来分配请求，响应时间短的优先分配。
+Nginx本身不支持fair，如果需要这种调度算法，则必须安装upstream_fair模块。  
+5、url_hash（第三方）  
+按访问的URL的哈希结果来分配请求，使每个URL定向到一台后端服务器，可以进一步提高后端缓存服务器的效率。Nginx本身不支持url_hash，如果需要这种调度算法，则必须安装Nginx的hash软件包。  
+
+- 负载均衡实战 
+
+实战1：浏览器访问www.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8080、192.168.1.101:8081（默认采用轮询路由策略）  
+```
+upstream ymdxServer {
+    server 192.168.1.101:8080;
+    server 192.168.1.101:8081;
+}
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    location / {
+       proxy_pass http://ymdxServer/;
+       index index.html index.htm;
+    }
+}
+```
+实战2：采用权重Weight路由策略  
+```
+upstream ymdxServer {
+    server 192.168.1.101:8080 weight=1;
+    server 192.168.1.101:8081 weight=2;
+}
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    location / {
+       proxy_pass http://ymdxServer/;
+       index index.html index.htm;
+    }
+}
+```
+实战3：采用ip_hash路由策略  
+```
+upstream ymdxServer {
+    server 192.168.1.101:8080;
+    server 192.168.1.101:8081;
+    ip_hash;
+}
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    location / {
+       proxy_pass http://ymdxServer/;
+       index index.html index.htm;
+    }
+}
+```
+
+- Nginx配置故障转移  
+当上游服务器（真实访问的服务器），一旦出现故障或者是没有及时响应，应该直接轮询到下一台服务器，保证服务器的高可用。  
+
+proxy_connect_timeout：后端服务器连接的超时时间_发起握手等候响应超时时间  
+proxy_read_timeout：连接成功后_等候后端服务器响应时间_其实已经进入后端的排队之中等候处理（也可以说是后端服务器处理请求的时间）  
+proxy_send_timeout：后端服务器数据回传时间_就是在规定时间之内后端服务器必须传完所有的数据  
+
+``` 
+upstream ymdxServer {
+    server 192.168.1.101:8080;
+    server 192.168.1.101:8081;
+}
+server{
+    listen 80;
+    server_name www.ymdx.com;
+
+    location / {
+       proxy_pass http://ymdxServer/;
+       proxy_connect_timeout 1s;
+       proxy_read_timeout 1s;
+       proxy_send_timeout 1s;
+       
+       index index.html index.htm;
+    }
+}
+```
+
+#### nginx rewrite  
+Nginx提供的全局变量或自己设置的变量，结合正则表达式和标志位实现url重写以及重定向。rewrite只能放在server{},location{},if{}中，并且只能对域名后边的除去传递的参数外的字符串起作用。  
+Rewrite主要的功能就是实现URL的重写，Nginx的Rewrite规则采用Pcre，perl兼容正则表达式的语法规则匹配，如果需要Nginx的Rewrite功能，在编译Nginx之前，需要编译安装PCRE库。  
+通过Rewrite规则，可以实现规范的URL、根据变量来做URL转向及选择配置。  
+
+- Rewrite全局变量  
+nginx的rewrite规则就是使用正则匹配请求的url，然后根据定义的规则进行重写和改变，需ngx_http_rewrite_module模块来支持url重写功能，该模块是标准模块，默认已经安装。  
+
+|变量|含义|
+|:----|:----|
+|$args|这个变量等于请求行中的参数，同$query_string|
+|$content length|请求头中的Content-length字段|
+|$content_type|请求头中的Content-Type字段|
+|$document_root|当前请求在root指令中指定的值|
+|$host|请求主机头字段，否则为服务器名称|
+|$http_user_agent|客户端agent信息|
+|$http_cookie|客户端cookie信息|
+|$limit_rate|这个变量可以限制连接速率|
+|$request_method|客户端请求的动作，通常为GET或POST|
+|$remote_addr|客户端的IP地址|
+|$remote_port|客户端的端口|
+|$remote_user|已经经过Auth Basic Module验证的用户名|
+|$request_filename|当前请求的文件路径，由root或alias指令与URI请求生成|
+|$scheme|HTTP方法（如http，https）|
+|$server_protocol|请求使用的协议，通常是HTTP/1.0或HTTP/1.1|
+|$server_addr|服务器地址，在完成一次系统调用后可以确定这个值|
+|$server_name|服务器名称|
+|$server_port|请求到达服务器的端口号|
+|$request_uri|包含请求参数的原始URI，不包含主机名，如”/foo/bar.php?arg=baz”|
+|$uri|不带请求参数的当前URI，$uri不包含主机名，如”/foo/bar.html”|
+|$document_uri|与$uri相同|
+
+- 判断IP地址来源
+``` 
+## 如果访问的ip地址为192.168.1.102，则返回403
+if ($remote_addr = 192.168.1.102) {  
+    return 403;  
+} 
+```  
+
+- 限制浏览器访问  
+``` 
+## 不允许谷歌浏览器访问，如果是谷歌浏览器返回500
+if ($http_user_agent ~ Chrome) {   
+    return 500;  
+}
+```
+
+--- 
+
+### 常见名词  
+- 高并发
+- 高可用
+- 幂等性
+- 心跳检测
+- 隔离技术
+- 限流技术
+- 降级技术
+- 雪崩效应
+- 超时机制
+- 防重设计
+- 重试机制
+- 补偿机制
+- 回滚机制
+- 注册中心
+- 服务化
+- 拆分
+- 命中率
+- 多级缓存
+- 异步并发
+- 平滑扩容
+- 可伸缩
+- 敏捷迭代
+- 无状态
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 
 
