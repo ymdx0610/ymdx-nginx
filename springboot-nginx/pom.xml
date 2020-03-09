@@ -8,7 +8,7 @@
         <artifactId>ymdx-nginx</artifactId>
         <version>1.0-SNAPSHOT</version>
     </parent>
-    <artifactId>springboot-8080</artifactId>
+    <artifactId>springboot-nginx</artifactId>
 
     <dependencies>
         <dependency>

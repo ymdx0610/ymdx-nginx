@@ -20,8 +20,7 @@
     </properties>
 
     <modules>
-        <module>springboot-8080</module>
-        <module>springboot-8081</module>
+        <module>springboot-nginx</module>
     </modules>
 
     <dependencies>

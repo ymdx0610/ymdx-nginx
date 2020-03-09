@@ -562,7 +562,7 @@ Nginx本身不支持fair，如果需要这种调度算法，则必须安装upstr
 
 - 负载均衡实战 
 
-实战1：浏览器访问www.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8080、192.168.1.101:8081（默认采用轮询路由策略）  
+实战1：浏览器访问www.ymdx.com，nginx接收请求并将其转发至192.168.1.101:8080、192.168.1.101:8081（默认轮询策略）  
 ```
 upstream ymdxServer {
     server 192.168.1.101:8080;
@@ -578,7 +578,7 @@ server{
     }
 }
 ```
-实战2：采用权重Weight路由策略  
+实战2：采用权重策略  
 ```
 upstream ymdxServer {
     server 192.168.1.101:8080 weight=1;
@@ -594,7 +594,7 @@ server{
     }
 }
 ```
-实战3：采用ip_hash路由策略  
+实战3：采用IP绑定策略  
 ```
 upstream ymdxServer {
     server 192.168.1.101:8080;
@@ -686,6 +686,214 @@ if ($http_user_agent ~ Chrome) {
     return 500;  
 }
 ```
+
+#### Nginx动态负载均衡  
+传统的负载均衡，如果Upstream参数发生变化，每次都需要重新加载nginx.conf文件，因此扩展性不是很高，所以我们可以采用动态负载均衡，
+实现Upstream可配置化、动态化，无需人工重新加载nginx.conf。这类似分布式的配置中心。  
+
+- 动态负载均衡实现方案  
+1. Consul+Consul-template：每次发现配置更改需要reload nginx，重启Nginx。
+2. Consul+OpenResy：实现无需reload，动态负载均衡  
+3. Consul+upsync+Nginx：实现无需reload，动态负载均衡  
+
+- 常用服务器注册与发现框架  
+常见服务发现框架Consul、Eureka、ZooKeeper以及Etcd  
+ZooKeeper是这种类型的项目中历史最悠久的之一，它起源于Hadoop。它非常成熟、可靠，被许多大公司（YouTube、eBay、雅虎等）使用。  
+etcd是一个采用HTTP协议的健/值对存储系统，它是一个分布式和功能层次配置系统，可用于构建服务发现系统。其很容易部署、安装和使用，提供了可靠的数据持久化特性。它是安全的并且文档也十分齐全。  
+
+- 相关软件下载  
+[Nginx](http://nginx.org/download/nginx-1.9.9.tar.gz)  
+[Consul](https://releases.hashicorp.com/consul/1.7.1/consul_1.7.1_linux_amd64.zip)  
+[nginx-upsync-module](https://github.com/weibocom/nginx-upsync-module/archive/master.zip)  
+
+- Consul快速入门  
+Consul是一款开源的分布式服务注册与发现系统，通过HTTP API可以使得服务注册、发现实现起来非常简单，它支持如下特性：  
+服务注册：服务实现者可以通过HTTP API或DNS方式，将服务注册到Consul。  
+服务发现：服务消费者可以通过HTTP API或DNS方式，从Consul获取服务的IP和PORT。  
+故障检测：支持如TCP、HTTP等方式的健康检查机制，从而当服务有故障时自动摘除。  
+K/V存储：使用K/V存储实现动态配置中心，其使用HTTP长轮询实现变更触发和配置更改。  
+多数据中心：支持多数据中心，可以按照数据中心注册和发现服务，即支持只消费本地机房服务，使用多数据中心集群还可以避免单数据中心的单点故障。  
+Raft算法：Consul使用Raft算法实现集群数据一致性。  
+通过Consul可以管理服务注册与发现，接下来需要有一个与Nginx部署在同一台机器的Agent来实现Nginx配置更改和Nginx重启功能。
+我们有Confd或者Consul-template两个选择，而Consul-template是Consul官方提供的，我们就选择它了。其使用HTTP长轮询实现变更触发和配置更改（使用Consul的watch命令实现）。
+也就是说，我们使用Consul-template实现配置模板，然后拉取Consul配置渲染模板来生成Nginx实际配置。  
+
+- Consul环境搭建  
+```
+## 下载安装
+$ cd /opt/download/
+$ wget https://releases.hashicorp.com/consul/1.7.1/consul_1.7.1_linux_amd64.zip
+$ unzip consul_1.7.1_linux_amd64.zip
+# -bash: unzip: 未找到命令
+$ yum -y install unzip
+$ unzip consul_1.7.1_linux_amd64.zip
+$ mkdir -p /opt/app/consul
+$ mv consul /opt/app/consul/
+$ cd /opt/app/consul/
+$ ./consul
+
+## 启动
+# 172.16.49.131安装Consul的linux虚拟机的IP地址
+$ nohup ./consul agent -dev -ui -node=consul-dev -client=172.16.49.131 &
+
+# 临时关闭防火墙
+$ systemctl stop firewalld  
+
+# 如果没有关闭防火墙，需要开放8500端口
+$ firewall-cmd --permanent --zone=public --add-port=8500/tcp
+$ firewall-cmd --reload
+
+## 浏览器访问172.16.49.131:8500
+```
+- 使用PostMan注册Http服务  
+``` 
+http://172.16.49.131:8500/v1/catalog/register
+
+# 参数1
+{"Datacenter":"dc1", "Node":"tomcat", "Address":"192.168.25.221", "Service": {"Id":"192.168.25.221:8080", "Service":"ymdx", "tags":["dev"], "Port":8080}}
+
+# 参数2
+{"Datacenter":"dc1", "Node":"tomcat", "Address":"192.168.25.221", "Service": {"Id":"192.168.25.221:8081", "Service":"ymdx", "tags":["dev"], "Port":8081}}
+
+## 参数说明：
+# Datacenter指定数据中心，Address指定服务IP，Service.Id指定服务唯一标识，Service.Service指定服务分组，Service.tags指定服务标签（如测试环境、预发环境等），Service.Port指定服务端口。  
+```
+- 发现Http服务  
+``` 
+http://172.16.49.131:8500/v1/catalog/service/ymdx
+```
+
+#### nginx-upsync-module  
+Upsync是新浪微博开源的基于Nginx实现动态配置的三方模块。Nginx-Upsync-Module的功能是拉取Consul的后端server的列表，并动态更新Nginx的路由信息。此模块不依赖于任何第三方模块。
+Consul作为Nginx的DB，利用Consul的KV服务，每个Nginx Work进程独立的去拉取各个upstream的配置，并更新各自的路由。  
+
+- 搭建过程  
+``` 
+## Consul安装过程参见上面 
+
+## 安装nginx-upsync-module
+$ cd /opt/download/
+$ wget https://github.com/weibocom/nginx-upsync-module/archive/master.zip  
+$ unzip nginx-upsync-module-master.zip
+
+## 下载Nginx
+$ wget http://nginx.org/download/nginx-1.9.9.tar.gz
+$ tar -zxvf nginx-1.9.9.tar.gz
+$ cd nginx-1.9.9
+
+## 配置Nginx
+$ groupadd nginx
+$ useradd -g nginx -s /sbin/nologin nginx
+$ mkdir -p /var/tmp/nginx/client/
+$ mkdir -p /opt/apt/nginx
+
+## 编译Nginx
+$ ./configure --prefix=/opt/app/nginx --user=nginx --group=nginx --with-http_ssl_module --with-http_flv_module --with-http_stub_status_module --with-http_gzip_static_module --with-http_realip_module --http-client-body-temp-path=/var/tmp/nginx/client/ --http-proxy-temp-path=/var/tmp/nginx/proxy/ --http-fastcgi-temp-path=/var/tmp/nginx/fcgi/ --http-uwsgi-temp-path=/var/tmp/nginx/uwsgi --http-scgi-temp-path=/var/tmp/nginx/scgi --with-pcre --add-module=../nginx-upsync-module-master
+
+## 安装Nginx
+make && make install
+
+## 若编译时报错./configure: error: SSL modules require the OpenSSL library.
+$ yum -y install openssl openssl-devel
+```
+- Upstream 动态配置  
+``` 
+$ vim /opt/app/nginx/conf/nginx.conf
+
+## 动态去consul获取注册的真实反向代理地址
+upstream ymdx {
+    server 127.0.0.1:11111;
+    upsync 172.16.49.131:8500/v1/kv/upstreams/ymdx upsync_timeout=6m upsync_interval=500ms upsync_type=consul strong_dependency=off;
+    upsync_dump_path /opt/app/nginx/conf/servers/servers_test.conf;
+}
+
+server {
+    listen       80;
+    server_name  172.16.49.131;
+
+    location / {
+        proxy_pass http://ymdx;
+        index  index.html index.htm;
+    }
+}
+```
+> upsync配置参数说明：  
+upsync指令指定从consul哪个路径拉取上游服务器配置；    
+upsync_timeout配置从consul拉取上游服务器配置的超时时间；  
+upsync_interval配置从consul拉取上游服务器配置的间隔时间；  
+upsync_type指定使用consul配置服务器；  
+strong_dependency配置nginx在启动时是否强制依赖配置服务器，如果配置为on，则拉取配置失败时nginx启动同样失败；  
+upsync_dump_path指定从consul拉取的上游服务器后持久化到的位置，这样即使consul服务器出问题了，本地还有一个备份。  
+
+- 创建upsync_dump_path   
+``` 
+mkdir -p /opt/app/nginx/conf/servers/
+```
+
+- 检查Nginx配置是否正确  
+``` 
+$ /opt/app/nginx/sbin/nginx -t
+```
+
+- 启动consul  
+``` 
+$ cd /opt/app/consul/
+$ nohup ./consul agent -dev -ui -node=consul-dev -client=172.16.49.131 &
+```
+
+- 添加nginx upstream服务  
+
+1. 使用linux命令方式发送put请求  
+``` 
+curl -X PUT http://172.16.49.131:8500/v1/kv/upstreams/ymdx/192.168.25.221:8080
+curl -X PUT http://172.16.49.131:8500/v1/kv/upstreams/ymdx/192.168.25.221:8081
+curl -X PUT http://172.16.49.131:8500/v1/kv/upstreams/ymdx/192.168.25.221:8082
+```
+
+2. 使用postmen发送put请求  
+``` 
+http://172.16.49.131:8500/v1/kv/upstreams/ymdx/192.168.25.221:8080
+http://172.16.49.131:8500/v1/kv/upstreams/ymdx/192.168.25.221:8081
+http://172.16.49.131:8500/v1/kv/upstreams/ymdx/192.168.25.221:8082
+```
+
+3. 负载均衡信息参数  
+``` 
+{"weight":1, "max_fails":2, "fail_timeout":10, "down":0}
+```
+- 启动Nginx  
+``` 
+$ /opt/app/nginx/sbin/nginx
+```
+
+
+
+
+
+
+
+
+
+ 
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 --- 
 
