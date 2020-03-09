@@ -1,4 +1,4 @@
-## 义码当仙之高并发与高可用用实战（Nginx篇）
+## 义码当仙之高并发与高可用实战（Nginx篇）
 
 ### DNS域名解析  
 整个过程大体描述如下，其中前2个步骤是在本机完成的，后8个步骤涉及到真正的域名解析服务器：  
@@ -228,21 +228,8 @@ Nginx一般用户七层负载均衡，其吞吐量有一定的限制。为了提
 
 #### Nginx目录结构
 ``` 
-[root@localhost nginx]# ll /opt/download/nginx-1.9.9
-总用量 656
-drwxr-xr-x. 6 es   es     4096 3月   6 15:25 auto
--rw-r--r--. 1 es   es   256752 12月  9 2015 CHANGES
--rw-r--r--. 1 es   es   390572 12月  9 2015 CHANGES.ru
-drwxr-xr-x. 2 es   es      168 3月   6 15:25 conf
--rwxr-xr-x. 1 es   es     2481 12月  9 2015 configure
-drwxr-xr-x. 4 es   es       72 3月   6 15:25 contrib
-drwxr-xr-x. 2 es   es       40 3月   6 15:25 html
--rw-r--r--. 1 es   es     1397 12月  9 2015 LICENSE
--rw-r--r--. 1 root root    358 3月   6 15:25 Makefile
-drwxr-xr-x. 2 es   es       21 3月   6 15:25 man
-drwxr-xr-x. 3 root root    174 3月   6 15:26 objs
--rw-r--r--. 1 es   es       49 12月  9 2015 README
-drwxr-xr-x. 9 es   es       91 3月   6 15:25 src
+[root@localhost download]# ls nginx-1.9.9
+auto  CHANGES  CHANGES.ru  conf  configure  contrib  html  LICENSE  Makefile  man  objs  README  src
 ```
 - src目录：存放Nginx源码  
 - man目录：存放Nginx帮助手册  
@@ -533,6 +520,8 @@ server{
 |数据链路层|传输有地址的桢以及错误检测功能|SLIP,CSLIP,PPP,MTU,ARP,RARP|
 |物理层|以二进制数据形式在物理媒体上传输数据|ISO2110,IEEE802,IEEE802.2|
 
+![IMAGE](resouces/网络模型.png)  
+
 - 四层和七层负载均衡的区别  
 四层负载均衡，在网络模型中的传输层中，基于主要是基于tcp协议报文实现负载均衡（比如LVS、haproxy就是四层负载均衡器），使用改写报文的源地址和目的地址。  
 七层负载均衡，在网络模型中应用层中，基于URL或者HTTP协议实现负载均衡，Web服务器。  
@@ -791,7 +780,7 @@ $ mkdir -p /opt/apt/nginx
 $ ./configure --prefix=/opt/app/nginx --user=nginx --group=nginx --with-http_ssl_module --with-http_flv_module --with-http_stub_status_module --with-http_gzip_static_module --with-http_realip_module --http-client-body-temp-path=/var/tmp/nginx/client/ --http-proxy-temp-path=/var/tmp/nginx/proxy/ --http-fastcgi-temp-path=/var/tmp/nginx/fcgi/ --http-uwsgi-temp-path=/var/tmp/nginx/uwsgi --http-scgi-temp-path=/var/tmp/nginx/scgi --with-pcre --add-module=../nginx-upsync-module-master
 
 ## 安装Nginx
-make && make install
+$ make && make install
 
 ## 若编译时报错./configure: error: SSL modules require the OpenSSL library.
 $ yum -y install openssl openssl-devel
@@ -866,6 +855,109 @@ http://172.16.49.131:8500/v1/kv/upstreams/ymdx/192.168.25.221:8082
 $ /opt/app/nginx/sbin/nginx
 ```
 
+#### 基于Nginx 1.9实现四层负载均衡  
+
+- Socket  
+Socket就是为网络服务提供的一种机制，通讯的两端都有Sokcet，网络通讯其实就是Sokcet间的通讯，数据在两个Sokcet间通过IO传输。  
+
+- TCP与UDP在概念上的区别  
+UDP:  
+1. 是面向无连接, 将数据及源的封装成数据包中，不需要建立连接；  
+2. 每个数据报的大小在限制64k内；  
+3. 因为无连接，是不可靠协议；  
+d. 不需要建立连接，速度快；  
+
+TCP：  
+1. 建议连接，形成传输数据的通道；  
+2. 在连接中进行大数据量传输，以字节流方式；  
+3. 通过三次握手完成连接，是可靠协议；
+4. 必须建立连接m效率会稍低；  
+
+- Http协议组成部分  
+http协议基于TCP协议封装成超文本传输协议，http分为请求与响应，http协议分为请求参数和方法类型、请求头、请求体，响应分为 响应状态、响应头、响应体等。  
+
+- 四层负载均衡与七层负载均衡区别  
+四层负载均衡：在网络模型中的传输层中，基于主要是基于tcp协议报文实现负载均衡（比如LVS、haproxy、F5就是四层负载均衡器），使用改写报文的源地址和目的地址的方式。  
+七层负载均衡：在网络模型中应用层中，基于URL或者HTTP协议实现负载均衡，Web服务器。  
+
+- 实现过程  
+```
+## 下载nginx_tcp_proxy_module插件，支持TCP转发和负载均衡 
+$ cd /opt/download/ 
+$ wget https://github.com/yaoweibin/nginx_tcp_proxy_module/tarball/master
+$ tar -zxvf master
+
+## 下载Nginx
+$ wget http://nginx.org/download/nginx-1.9.9.tar.gz
+$ tar -zxvf nginx-1.9.9.tar.gz
+$ cd nginx-1.9.9
+
+## 下载tcp.patch最新补丁
+patch -p1 < ../yaoweibin-nginx_tcp_proxy_module-b8a3028/tcp.patch
+
+# 若报错：-bash: patch: 未找到命令，则需要执行下面命令安装patch命令
+$ yum -y install patch
+$ patch -p1 < ../yaoweibin-nginx_tcp_proxy_module-b8a3028/tcp.patch
+
+## 编译Nginx
+$ ./configure --prefix=/opt/app/nginx --user=nginx --group=nginx --add-module=../yaoweibin-nginx_tcp_proxy_module-b8a3028
+
+## 安装
+$ make && make install
+
+## 如果报如下错误：
+In file included from ../yaoweibin-nginx_tcp_proxy_module-b8a3028/ngx_tcp.h:32:0,
+                 from ../yaoweibin-nginx_tcp_proxy_module-b8a3028/ngx_tcp.c:5:
+../yaoweibin-nginx_tcp_proxy_module-b8a3028/ngx_tcp_upstream.h:144:9: 错误：未知的类型名‘ngx_resolver_addr_t’
+         ngx_resolver_addr_t *addrs;
+         ^
+make[1]: *** [objs/addon/yaoweibin-nginx_tcp_proxy_module-b8a3028/ngx_tcp.o] 错误 1
+make[1]: 离开目录“/opt/download/nginx-1.9.9”
+make: *** [build] 错误 2
+## 上述错误解决办法：修改第三方模块包里的头文件ngx_tcp_upstream.h，定位到144行，将ngx_resolver_addr_t 改为 ngx_addr_t
+
+$ cd /opt/download/yaoweibin-nginx_tcp_proxy_module-b8a3028 
+$ vim ngx_tcp_upstream.h
+# :set number 显示vim编辑器行号
+
+$ cd /opt/download/nginx-1.9.9/
+$ make && make install
+
+## 修改Nginx.conf配置文件，做如下配置
+worker_processes  1;
+
+events {
+    worker_connections  1024;
+}
+
+tcp {
+    # 配置上游服务器（真实主机）
+    upstream ymdx {
+        server 192.168.25.221:8001;
+	    server 192.168.25.221:8002;
+    }
+
+    server {
+        # 监听9999端口
+        listen       9999;
+        # 监听的服务器地址
+        server_name  172.16.49.131;
+        # 反向代理upstream
+        proxy_pass ymdx;
+    }
+}
+
+## 启动Nginx服务器
+$ /opt/app/nginx/sbin/nginx
+
+## 创建两个Sokcet服务器端  
+192.168.25.221:8001
+192.168.25.221:8002
+
+## 测试
+当客户端向服务端发出建立连接请求，将由Nginx(172.16.49.13:9999)反向代理至真实上游主机，如果连接不中断，则一直通过建立TCP连接进行通信；
+当重新建立连接，则轮询至下个真实主机节点建立连接，表现出负载均衡的效果
+```
 
 
 
