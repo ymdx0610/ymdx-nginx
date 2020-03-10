@@ -218,7 +218,7 @@ Nginx一般用户七层负载均衡，其吞吐量有一定的限制。为了提
 #### Nginx安装  
 [Nginx下载地址](http://nginx.org/download/)  
 [PCRE下载地址](http://jaist.dl.sourceforge.net/project/pcre/pcre/)  
-[安装文档](https://github.com/ymdx0610/ymdx-software-installation/wiki/Centos7下安装Nginx)  
+[安装Nginx](https://github.com/ymdx0610/ymdx-software-installation/wiki/Centos7下安装Nginx)  
 
 #### Nginx应用场景
 1. http服务器：Nginx是一个http服务可以独立提供http服务。可以做网页静态服务器。  
@@ -955,9 +955,358 @@ $ /opt/app/nginx/sbin/nginx
 192.168.25.221:8002
 
 ## 测试
-当客户端向服务端发出建立连接请求，将由Nginx(172.16.49.13:9999)反向代理至真实上游主机，如果连接不中断，则一直通过建立TCP连接进行通信；
+当客户端向服务端发出建立连接请求，将由Nginx(172.16.49.131:9999)反向代理至真实上游主机，如果连接不中断，则一直通过建立TCP连接进行通信；
 当重新建立连接，则轮询至下个真实主机节点建立连接，表现出负载均衡的效果
 ```
+
+#### lvs + keepalived + nginx实现高性能负载均衡集群  
+
+- LVS作用  
+LVS是一个开源的软件，可以实现传输层四层负载均衡。LVS是Linux Virtual Server的缩写，意思是Linux虚拟服务器。
+目前有三种IP负载均衡技术（VS/NAT、VS/TUN和VS/DR）；八种调度算法（rr,wrr,lc,wlc,lblc,lblcr,dh,sh）。  
+
+- Keepalived作用  
+LVS可以实现负载均衡，但是不能够进行健康检查，比如一个rs出现故障，LVS 仍然会把请求转发给故障的rs服务器，这样就会导致请求的无效性。
+keepalive 软件可以进行健康检查，而且能同时实现 LVS 的高可用性，解决 LVS 单点故障的问题，其实 keepalive 就是为 LVS 而生的。  
+
+- keepalived和其工作原理  
+keepalived是一个类似于Layer2,4,7交换机制的软件。是Linux集群管理中保证集群高可用的一个服务软件，其功能是用来防止单点故障。  
+keepalived的工作原理：keepalived是基于VRRP协议实现的保证集群高可用的一个服务软件，主要功能是实现真机的故障隔离和负载均衡器间的失败切换，防止单点故障。
+在了解keepalived原理之前先了解一下VRRP协议。 
+
+VRRP协议：  
+Redundancy Protocol虚拟路由冗余协议。是一种容错协议，保证当主机的下一跳路由出现故障时，由另一台路由器来代替出现故障的路由器进行工作，从而保持网络通信的连续性和可靠性。  
+VRRP的相关术语：  
+虚拟路由器：由一个 Master 路由器和多个 Backup 路由器组成。主机将虚拟路由器当作默认网关。  
+VRID：虚拟路由器的标识。有相同 VRID 的一组路由器构成一个虚拟路由器。  
+Master 路由器：虚拟路由器中承担报文转发任务的路由器。  
+Backup 路由器： Master 路由器出现故障时，能够代替 Master 路由器工作的路由器。  
+虚拟 IP 地址：虚拟路由器的 IP 地址。一个虚拟路由器可以拥有一个或多个IP 地址。  
+IP 地址拥有者：接口 IP 地址与虚拟 IP 地址相同的路由器被称为 IP 地址拥有者。  
+虚拟 MAC 地址：一个虚拟路由器拥有一个虚拟 MAC 地址。虚拟 MAC 地址的格式为 00-00-5E-00-01-{VRID}。
+通常情况下，虚拟路由器回应 ARP 请求使用的是虚拟 MAC 地址，只有虚拟路由器做特殊配置的时候，才回应接口的真实 MAC 地址。  
+优先级： VRRP 根据优先级来确定虚拟路由器中每台路由器的地位。  
+非抢占方式：如果 Backup 路由器工作在非抢占方式下，则只要 Master 路由器没有出现故障，Backup 路由器即使随后被配置了更高的优先级也不会成为Master 路由器。  
+抢占方式：如果 Backup 路由器工作在抢占方式下，当它收到 VRRP 报文后，会将自己的优先级与通告报文中的优先级进行比较。如果自己的优先级比当前的 Master 路由器的优先级高，就会主动抢占成为 Master 路由器；否则，将保持 Backup 状态。  
+
+VRRP将局域网内的一组路由器划分在一起，形成一个VRRP备份组，它在功能上相当于一台路由器的功能，使用虚拟路由器号进行标识（VRID）。虚拟路由器有自己的虚拟IP地址和虚拟MAC地址，它的外在变现形式和实际的物理路由完全一样。局域网内的主机将虚拟路由器的IP地址设置为默认网关，通过虚拟路由器与外部网络进行通信。  
+虚拟路由器是工作在实际的物理路由器之上的。它由多个实际的路由器组成，包括一个Master路由器和多个Backup路由器。 Master路由器正常工作时，局域网内的主机通过Master与外界通信。当Master路由器出现故障时，Backup路由器中的一台设备将成为新的Master路由器，接替转发报文的工作。（路由器的高可用）  
+
+VRRP的工作工程：  
+1. 虚拟路由器中的路由器根据优先级选举出 Master。 Master 路由器通过发送免费 ARP 报文，将自己的虚拟 MAC 地址通知给与它连接的设备或者主机，从而承担报文转发任务；  
+2. Master 路由器周期性发送 VRRP 报文，以公布其配置信息（优先级等）和工作状况；  
+3. 如果 Master 路由器出现故障，虚拟路由器中的 Backup 路由器将根据优先级重新选举新的 Master；  
+4. 虚拟路由器状态切换时， Master 路由器由一台设备切换为另外一台设备，新的 Master 路由器只是简单地发送一个携带虚拟路由器的 MAC 地址和虚拟 IP地址信息的ARP 报文，这样就可以更新与它连接的主机或设备中的ARP 相关信息。网络中的主机感知不到 Master 路由器已经切换为另外一台设备。  
+5. Backup 路由器的优先级高于 Master 路由器时，由 Backup 路由器的工作方式（抢占方式和非抢占方式）决定是否重新选举 Master。  
+VRRP优先级的取值范围为0到255（数值越大表明优先级越高）  
+
+- 实战  
+
+> 相关软件包
+
+[Nginx](http://nginx.org/download/nginx-1.9.9.tar.gz)  
+[keepalived](https://www.keepalived.org/software/keepalived-2.0.20.tar.gz)  
+
+> 环境服务配置  
+``` 
+Nginx主服务器  172.16.49.132
+Nginx备服务器  172.16.49.132
+LVS虚拟VIP    172.16.49.166
+```
+
+> 环境搭建  
+
+[安装Nginx](https://github.com/ymdx0610/ymdx-software-installation/wiki/Centos7下安装Nginx)  
+
+```
+### 在虚拟机172.16.49.132上操作 
+$ mkdir -p app backup download logs work
+
+## 下载安装keepalived
+$ cd /opt/download/
+$ wget https://www.keepalived.org/software/keepalived-2.0.20.tar.gz  
+$ tar -zxvf keepalived-2.0.20.tar.gz
+$ cd keepalived-2.0.20
+$ ./configure --prefix=/opt/app/keepalived
+
+# *** WARNING - this build will not support IPVS with IPv6. Please install libnl/libnl-3 dev libraries to support IPv6 with IPVS.
+$ yum -y install libnl libnl-devel libnfnetlink-devel
+$ ./configure --prefix=/opt/app/keepalived
+$ make && make install
+```
+
+> keepalived安装成Linux系统服务  
+
+因为没有使用keepalived的默认安装路径（默认路径：/usr/local），安装完成之后，需要做一些修改工作  
+``` 
+# keepalived启动脚本变量引用文件，默认文件路径是/etc/sysconfig/，也可以不做软链接，直接修改启动脚本中文件路径即可（安装目录下）
+$ cp /opt/app/keepalived/etc/sysconfig/keepalived /etc/sysconfig/keepalived
+ 
+# 将keepalived主程序加入到环境变量（安装目录下）
+$ cp /opt/app/keepalived/sbin/keepalived /usr/sbin/keepalived
+ 
+# keepalived启动脚本（源码目录下），放到/etc/init.d/目录下就可以使用service命令便捷调用
+$ cp /opt/download/keepalived-2.0.20/keepalived/etc/init.d/keepalived /etc/init.d/keepalived
+ 
+# 将配置文件放到默认路径下
+$ mkdir -p /etc/keepalived
+$ cp /opt/app/keepalived/etc/keepalived/keepalived.conf /etc/keepalived/
+
+# 加为系统服务
+$ chkconfig –-add keepalived
+
+# 设置开启自启动
+$ chkconfig keepalived on
+
+# 查看开机启动的服务：
+$ chkconfig –-list
+
+## 启动、关闭、重启
+$ service keepalived start|stop|restart
+```
+
+> 使用keepalived虚拟VIP  
+
+``` 
+$ vi /etc/keepalived/keepalived.conf
+
+## 配置如下
+! Configuration File for keepalived
+vrrp_script chk_nginx {
+    # 运行脚本，脚本见下面，作用：nginx宕机以后可以自动开启服务
+    script "/etc/keepalived/nginx_check.sh"
+    # 检测时间间隔
+    interval 2
+    # 如果条件成立的话，则权重 -20
+    weight -20
+}
+
+# 定义虚拟路由，VI_1为虚拟路由的标示符，自定义名称
+vrrp_instance VI_1 {
+    # 决定主从
+    state MASTER
+    # 绑定虚拟 IP 的网络接口，根据自己的机器填写
+    interface ens33
+    # 虚拟路由的 ID 号，两个节点设置必须一样
+    virtual_router_id 121
+    # 填写本机IP
+    mcast_src_ip 172.16.49.132
+    # 节点优先级，主要比从节点优先级高
+    priority 100
+    # 优先级高的设置 nopreempt 解决异常恢复后再次抢占的问题
+    nopreempt
+    # 组播信息发送间隔，两个节点设置必须一样，默认 1s
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    # 将 track_script 块加入 instance 配置块
+    track_script {
+        # 执行 Nginx 监控的服务
+        chk_nginx
+    }
+    # 虚拟IP，可配置多个
+    virtual_ipaddress {
+        172.16.49.166
+    }
+}
+```
+
+>  nginx + keepalived简单双机主从热备  
+
+双机主从热备概述：可以两台机子互为热备，平时各自负责各自的服务。在做上线更新的时候，关闭一台服务器的tomcat后，
+nginx自动把流量切换到另外一台服务的后备机子上，从而实现无痛更新，保持服务的持续性，提高服务的可靠性，从而保证服务器7*24小时运行。  
+
+> Nginx upstream 实现简单双机主从热备  
+
+只要在希望成为后备的服务器 ip 后面多添加一个 backup 参数，这台服务器就会成为备份服务器。
+在平时不使用，nginx 不会给它转发任何请求。只有当其他节点全部无法连接的时候，nginx 才会启用这个节点。
+一旦有可用的节点恢复服务，该节点则不再使用，又进入后备状态。  
+
+``` 
+worker_processes  1;
+
+events {
+    worker_connections  1024;
+}
+
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
+
+    sendfile        on;
+    keepalive_timeout  65;
+
+    # 配置上游服务器（真实主机）
+    upstream testproxy {
+    	server 192.168.25.221:8080;
+    	server 192.168.25.221:8081 backup;
+	}
+
+    server {
+        listen       80;
+        server_name  172.16.49.132;
+
+        location / {
+            proxy_pass   http://testproxy;
+
+			proxy_connect_timeout 1s;
+        	proxy_send_timeout 1s;
+        	proxy_read_timeout 1s;
+        }
+    }
+
+}
+```
+
+> Nginx+keepalived简单双机主从热备  
+
+两台虚拟机都安装keepalived， 虚拟一个VIP，配置主从关系，当主挂了，直接走备机。  
+Nginx主服务器  172.16.49.132  
+Nginx备服务器  172.16.49.133  
+LVS虚拟VIP    172.16.49.166  
+
+```  
+### 修改主keepalived信息（172.16.49.132）
+
+$ vi /etc/keepalived/keepalived.conf
+
+## 配置如下
+! Configuration File for keepalived
+vrrp_script chk_nginx {
+    # 运行脚本，脚本见下面，作用：nginx宕机以后可以自动开启服务
+    script "/etc/keepalived/nginx_check.sh"
+    # 检测时间间隔
+    interval 2
+    # 如果条件成立的话，则权重 -20
+    weight -20
+}
+
+# 定义虚拟路由，VI_1为虚拟路由的标示符，自定义名称
+vrrp_instance VI_1 {
+    # 决定主从
+    state MASTER
+    # 绑定虚拟 IP 的网络接口，根据自己的机器填写
+    interface ens33
+    # 虚拟路由的 ID 号，两个节点设置必须一样
+    virtual_router_id 121
+    # 填写本机IP
+    mcast_src_ip 172.16.49.132
+    # 节点优先级，主要比从节点优先级高
+    priority 100
+    # 优先级高的设置 nopreempt 解决异常恢复后再次抢占的问题
+    nopreempt
+    # 组播信息发送间隔，两个节点设置必须一样，默认 1s
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    # 将 track_script 块加入 instance 配置块
+    track_script {
+        # 执行 Nginx 监控的服务
+        chk_nginx
+    }
+    # 虚拟IP，可配置多个
+    virtual_ipaddress {
+        172.16.49.166
+    }
+}
+```
+```  
+### 修改主keepalived信息（172.16.49.133）
+$ vi /etc/keepalived/keepalived.conf
+
+## 配置如下
+! Configuration File for keepalived
+vrrp_script chk_nginx {
+    # 运行脚本，脚本见下面，作用：nginx宕机以后可以自动开启服务
+    script "/etc/keepalived/nginx_check.sh"
+    # 检测时间间隔
+    interval 2
+    # 如果条件成立的话，则权重 -20
+    weight -20
+}
+
+# 定义虚拟路由，VI_1为虚拟路由的标示符，自定义名称
+vrrp_instance VI_1 {
+    # 决定主从
+    state BACKUP
+    # 绑定虚拟 IP 的网络接口，根据自己的机器填写
+    interface ens33
+    # 虚拟路由的 ID 号，两个节点设置必须一样
+    virtual_router_id 121
+    # 填写本机IP
+    mcast_src_ip 172.16.49.133
+    # 节点优先级，主要比从节点优先级高
+    priority 100
+    # 优先级高的设置 nopreempt 解决异常恢复后再次抢占的问题
+    nopreempt
+    # 组播信息发送间隔，两个节点设置必须一样，默认 1s
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    # 将 track_script 块加入 instance 配置块
+    track_script {
+        # 执行 Nginx 监控的服务
+        chk_nginx
+    }
+    # 虚拟IP，可配置多个
+    virtual_ipaddress {
+        172.16.49.166
+    }
+}
+```
+
+> nginx+keepalived实现高可用  
+
+```  
+$ vim /etc/keepalived/nginx_check.sh
+```
+```
+#!/bin/bash
+A=`ps -C nginx –no-header |wc -l`
+if [ $A -eq 0 ];then
+    /opt/app/nginx/sbin/nginx
+    sleep 2
+    if [ `ps -C nginx --no-header |wc -l` -eq 0 ];then
+        killall keepalived
+    fi
+fi
+```
+```
+# 给脚本授权
+$ chmod 777 nginx_check.sh
+```
+
+- lvs与Nginx区别  
+LVS的负载能力强，因为其工作方式逻辑非常简单，仅进行请求分发，而且工作在网络的第4层，没有流量，所以其效率不需要有过多的忧虑。  
+LVS基本能支持所有应用，因为工作在第4层，所以LVS可以对几乎所有应用进行负载均衡，包括Web、数据库等。  
+注意：LVS并不能完全判别节点故障，比如在WLC规则下，如果集群里有一个节点没有配置VIP，将会导致整个集群不能使用。还有一些其他问题，目前尚需进一步测试。  
+
+Nginx工作在网路第7层，所以可以对HTTP应用实施分流策略，比如域名、结构等。相比之下，LVS并不具备这样的功能，所以Nginx可使用的场合远多于LVS。
+并且Nginx对网络的依赖比较小，理论上只要Ping得通，网页访问正常就能连通。LVS比较依赖网络环境。只有使用DR模式且服务器在同一网段内分流，效果才能得到保证。  
+Nginx可以通过服务器处理网页返回的状态吗、超时等来检测服务器内部的故障，并会把返回错误的请求重新发送到另一个节点。目前LVS和LDirectd 也支持对服务器内部情况的监控，但不能重新发送请求。  
+比如用户正在上传一个文件，而处理该上传信息的节点刚好出现故障，则Nginx会把上传请求重新发送到另一台服务器，而LVS在这种情况下会直接断掉。Nginx还能支持HTTP和Email（Email功能很少有人使用），LVS所支持的应用在这个电商比Nginx更多。  
+Nginx同样能承受很高负载并且能稳定运行，由于处理流量受限于机器I/O等配置，所以负载能力相对较差。  
+Nginx 安装、配置及测试相对来说比较简单，因为有相应的错误日志进行提示。LVS的安装、配置及测试所花的时间比较长，因为LVS对网络以来比较大，很多时候有可能因为网络问题而配置不能成功，出现问题时，解决的难度也相对较大。
+Nginx本身没有现成的热备方案，所以在单机上运行风险较大，建议KeepAlived配合使用。另外，Nginx可以作为LVS的节点机器使用，充分利用Nginx的功能和性能。当然这种情况也可以直接使用Squid等其他具备分发功能的软件。  
+具体应用具体分析。如果是比较小型的网站（每日PV小于100万），用户Nginx就完全可以应对，如果机器也不少，可以用DNS轮询。LVS后用的机器较多，在构建大型网站或者提供重要服务且机器较多时，可多加考虑利用LVS。  
+
+注意：阿里云默认不支持虚拟VIP技术，相关文档：https://yq.aliyun.com/ask/61502  
+
+
+
+
+
+
+
+
+
+
 
 
 
@@ -967,20 +1316,6 @@ $ /opt/app/nginx/sbin/nginx
 
 
  
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 
