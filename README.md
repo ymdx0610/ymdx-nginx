@@ -1320,26 +1320,41 @@ Nginx本身没有现成的热备方案，所以在单机上运行风险较大，
 
 - 动静分离的原理 
 ```  
-## 静态资源访问
-server {
-  listen 80;
-  server_name static.ymdx.com;
-  
-  location /static/imgs {
-      root /opt/resources;
-      index  index.html index.htm;
-  }
+worker_processes  1;
+
+events {
+    worker_connections  1024;
 }
 
-## 动态资源访问
-server {
-    listen 80;
-    server_name www.ymdx.com;
+http {
+    include       mime.types;
+    default_type  application/octet-stream;
 
-    location / {
-        proxy_pass http://192.168.25.221:8080;
-        index  index.html index.htm;
-   }
+    sendfile        on;
+    keepalive_timeout  65;
+
+    ## 静态资源访问
+    server {
+        listen 80;
+        server_name static.ymdx.com;
+      
+        location /static/imgs {
+            root /opt/resources/;
+            index  index.html index.htm;
+        }
+    }
+
+    ## 动态资源访问
+    server {
+        listen 80;
+        server_name www.ymdx.com;
+
+        location / {
+            proxy_pass http://192.168.25.221:8080;
+            index  index.html index.htm;
+       }
+    }
+
 }
 ``` 
 
@@ -1358,6 +1373,7 @@ server {
 虽然在返回 304 的时候已经做了一次数据库查询，但是可以避免接下来更多的数据库查询，并且没有返回页面内容而只是一个 HTTP Header，从而大大的降低带宽的消耗，对于用户的感觉也是提高。  
 
 ---
+
 
 
 
