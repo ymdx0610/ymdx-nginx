@@ -1011,7 +1011,7 @@ VRRP优先级的取值范围为0到255（数值越大表明优先级越高）
 ``` 
 Nginx主服务器  172.16.49.132
 Nginx备服务器  172.16.49.132
-LVS虚拟VIP    172.16.49.166
+LVS虚拟VIP    172.16.49.155
 ```
 
 > 环境搭建  
@@ -1030,7 +1030,7 @@ $ cd keepalived-2.0.20
 $ ./configure --prefix=/opt/app/keepalived
 
 # *** WARNING - this build will not support IPVS with IPv6. Please install libnl/libnl-3 dev libraries to support IPv6 with IPVS.
-$ yum -y install libnl libnl-devel libnfnetlink-devel
+$ yum -y install libnl libnl-devel libnfnetlink-devel popt-devel
 $ ./configure --prefix=/opt/app/keepalived
 $ make && make install
 ```
@@ -1072,6 +1072,7 @@ $ vi /etc/keepalived/keepalived.conf
 
 ## 配置如下
 ! Configuration File for keepalived
+
 vrrp_script chk_nginx {
     # 运行脚本，脚本见下面，作用：nginx宕机以后可以自动开启服务
     script "/etc/keepalived/nginx_check.sh"
@@ -1108,7 +1109,7 @@ vrrp_instance VI_1 {
     }
     # 虚拟IP，可配置多个
     virtual_ipaddress {
-        172.16.49.166
+        172.16.49.155
     }
 }
 ```
@@ -1174,6 +1175,7 @@ $ vi /etc/keepalived/keepalived.conf
 
 ## 配置如下
 ! Configuration File for keepalived
+
 vrrp_script chk_nginx {
     # 运行脚本，脚本见下面，作用：nginx宕机以后可以自动开启服务
     script "/etc/keepalived/nginx_check.sh"
@@ -1210,7 +1212,7 @@ vrrp_instance VI_1 {
     }
     # 虚拟IP，可配置多个
     virtual_ipaddress {
-        172.16.49.166
+        172.16.49.155
     }
 }
 ```
@@ -1220,6 +1222,7 @@ $ vi /etc/keepalived/keepalived.conf
 
 ## 配置如下
 ! Configuration File for keepalived
+
 vrrp_script chk_nginx {
     # 运行脚本，脚本见下面，作用：nginx宕机以后可以自动开启服务
     script "/etc/keepalived/nginx_check.sh"
@@ -1236,13 +1239,13 @@ vrrp_instance VI_1 {
     # 绑定虚拟 IP 的网络接口，根据自己的机器填写
     interface ens33
     # 虚拟路由的 ID 号，两个节点设置必须一样
-    virtual_router_id 121
+    virtual_router_id 121                                 n                                  v v   vvcxzx    xxx
     # 填写本机IP
     mcast_src_ip 172.16.49.133
     # 节点优先级，主要比从节点优先级高
-    priority 100
+    priority 90
     # 优先级高的设置 nopreempt 解决异常恢复后再次抢占的问题
-    nopreempt
+    nopreempt dscdddd  dx  dxdx cx x d  sd xs s s xs s sssss ssz                                                                                      
     # 组播信息发送间隔，两个节点设置必须一样，默认 1s
     advert_int 1
     authentication {
@@ -1256,7 +1259,7 @@ vrrp_instance VI_1 {
     }
     # 虚拟IP，可配置多个
     virtual_ipaddress {
-        172.16.49.166
+        172.16.49.155
     }
 }
 ```
