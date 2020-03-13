@@ -38,7 +38,7 @@ Windows环境下通过命令行输入ipconfig，Linux环境下通过cat /etc/res
 #### 用户分布广泛，网络情况复杂  
 许多大型的互联网都是为全球用户提供服务的，用户分布范围广，各地网络情况千差万别。各个运行商之间的互通，各个国家的数据连接等等。  
 #### 安全环境恶劣  
-由于互联网的开放性，使得互联网更容易受到攻击，包括各种省份证信息被窃取等事件屡见不鲜。  
+由于互联网的开放性，使得互联网更容易受到攻击，包括各种身份证信息被窃取等事件屡见不鲜。  
 #### 渐进式发展
 几乎所有的大型互联网网站都是从一个小网站开始，渐进发展起来的，好的互联网产品都是慢慢运营出来的。  
 
@@ -1375,31 +1375,334 @@ http {
 ---
 
 
+### 高并发服务降级特技  
+
+#### 背景  
+当今，基于SOA的架构已经大行其道。伴随着架构的SOA化，相关联的服务熔断、降级、限流等思想，也在各种技术讲座中频繁出现。接下来将结合Netflix开源的Hystrix框架，对这些思想做一个梳理。
+伴随着业务复杂性的提高，系统的不断拆分，一个面向用户端的API，其内部的RPC调用层层嵌套，调用链条可能会非常长。这会造成如下问题：  
+
+- API接口可用性降低  
+
+引用Hystrix官方的一个例子，假设tomcat对外提供的一个application，其内部依赖了30个服务，每个服务的可用性都很高，为99.99%。那整个applicatiion的可用性就是：99.99%的30次方 ＝ 99.7%，即0.3%的失败率。
+这也就意味着，每1亿个请求，有30万个失败；按时间来算，就是每个月的故障时间超过2小时。  
+
+#### 服务熔断  
+为了解决上述问题，服务熔断的思想被提出来。类似现实世界中的"保险丝"，当某个异常条件被触发，直接熔断整个服务，而不是一直等到此服务超时。   
+熔断的触发条件可以依据不同的场景有所不同，比如统计一个时间窗口内失败的调用次数。  
+
+#### 服务降级  
+有了熔断，就得有降级。所谓降级，就是当某个服务熔断之后，服务器将不再被调用，此时客户端可以自己准备一个本地的fallback回调，返回一个缺省值。 
+这样做，虽然服务水平下降，但好歹可用，比直接挂掉要强，当然这也要看适合的业务场景。  
+
+#### Hystrix  
+Hystrix 是一个微服务关于服务保护的框架，是Netflix开源的一款针对分布式系统的延迟和容错解决框架，目的是用来隔离分布式服务故障。
+它提供线程和信号量隔离，以减少不同服务之间资源竞争带来的相互影响；提供优雅降级机制；提供熔断机制使得服务可以快速失败，
+而不是一直阻塞等待服务响应，并能从中快速恢复。Hystrix通过这些机制来阻止级联失败并保证系统弹性、可用。  
+
+#### 服务隔离  
+当大多数人在使用Tomcat时，多个HTTP服务会共享一个线程池，假设其中一个HTTP服务访问的数据库响应非常慢，这将造成服务响应时间延迟增加，大多数线程阻塞等待数据响应返回，导致整个Tomcat线程池都被该服务占用，甚至拖垮整个Tomcat。
+因此，如果我们能把不同HTTP服务隔离到不同的线程池，则某个HTTP服务的线程池满了也不会对其他服务造成灾难性故障。这就需要线程隔离或者信号量隔离来实现了。
+使用线程隔离或信号隔离的目的是为不同的服务分配一定的资源，当自己的资源用完，直接返回失败而不是占用别人的资源。  
+
+#### 使用Hystrix实现服务隔离  
+Hystrix的资源隔离策略有两种，分别为：线程池和信号量。  
+
+- 线程池方式  
+1. 使用线程池隔离可以完全隔离第三方应用，请求线程可以快速放回。  
+2. 请求线程可以继续接受新的请求，如果出现问题线程池隔离是独立的不会影响其他应用。  
+3. 当失败的应用再次变得可用时，线程池将清理并可立即恢复，而不需要一个长时间的恢复。  
+4. 独立的线程池提高了并发性。  
+缺点：线程池隔离的主要缺点是它们增加计算开销（CPU）。每个命令的执行涉及到排队、调度和上下文切换都是在一个单独的线程上运行的。  
+
+- 信号量方式  
+使用一个原子计数器（或信号量）来记录当前有多少个线程在运行，当请求进来时先判断计数器的数值，若超过设置的最大线程个数则拒绝该请求，若不超过则通行，这时候计数器+1，请求返回成功后计数器-1。  
+与线程池隔离最大不同在于执行依赖代码的线程依然是请求线程  
+tips：信号量的大小可以动态调整, 线程池大小不可以  
+
+- 案例  
+
+> 搭建一套分布式rpc远程通讯案例：比如订单服务调用会员服务实现服务隔离，防止雪崩效应。  
+示例项目：  
+hystrix-order  
+hystrix-member  
+
+``` 
+public class OrderHystrixCommand extends HystrixCommand<JSONObject> {
+
+    @Autowired
+    private MemberService memberService;
+
+    public OrderHystrixCommand(MemberService memberService) {
+        super(setter());
+        this.memberService = memberService;
+    }
+
+    @Override
+    protected JSONObject run() {
+        JSONObject member = memberService.getMember();
+        System.out.println("当前线程名称：" + Thread.currentThread().getName() + "，订单服务调用会员服务：member：" + member);
+        return member;
+    }
+
+    private static Setter setter() {
+        // 服务分组
+        HystrixCommandGroupKey groupKey = HystrixCommandGroupKey.Factory.asKey("members");
+        // 服务标识
+        HystrixCommandKey commandKey = HystrixCommandKey.Factory.asKey("member");
+        // 线程池名称
+        HystrixThreadPoolKey threadPoolKey = HystrixThreadPoolKey.Factory.asKey("member-pool");
+
+        // 线程池配置：线程池大小为10，线程存活时间15秒，队列等待的阈值为100，超过100执行拒绝策略
+        HystrixThreadPoolProperties.Setter threadPoolProperties = HystrixThreadPoolProperties.Setter().withCoreSize(10)
+                .withKeepAliveTimeMinutes(15).withQueueSizeRejectionThreshold(100);
+
+        // 命令属性配置Hystrix，默认开启超时
+        HystrixCommandProperties.Setter commandProperties = HystrixCommandProperties.Setter()
+                // 采用线程池方式实现服务隔离
+                .withExecutionIsolationStrategy(HystrixCommandProperties.ExecutionIsolationStrategy.THREAD)
+                // 禁止超时
+                .withExecutionTimeoutEnabled(false);
+        return HystrixCommand.Setter.withGroupKey(groupKey).andCommandKey(commandKey).andThreadPoolKey(threadPoolKey)
+                .andThreadPoolPropertiesDefaults(threadPoolProperties).andCommandPropertiesDefaults(commandProperties);
+
+    }
+
+    @Override
+    protected JSONObject getFallback() {
+        // 如果Hystrix发生熔断，当前服务不可用，直接执行Fallback方法
+        System.out.println("系统错误！");
+        JSONObject jsonObject = new JSONObject();
+        jsonObject.put("code", 500);
+        jsonObject.put("msg", "系统错误！");
+        return jsonObject;
+    }
+
+}
+```
+```  
+public class OrderHystrixCommand2 extends HystrixCommand<JSONObject> {
+
+    @Autowired
+    private MemberService memberService;
+
+    public OrderHystrixCommand2(MemberService memberService) {
+        super(setter());
+        this.memberService = memberService;
+    }
+
+    @Override
+    protected JSONObject run() {
+        JSONObject member = memberService.getMember();
+        System.out.println("当前线程名称：" + Thread.currentThread().getName() + "，订单服务调用会员服务：member：" + member);
+        return member;
+    }
+
+    private static Setter setter() {
+        // 服务分组
+        HystrixCommandGroupKey groupKey = HystrixCommandGroupKey.Factory.asKey("members");
+        // 命令属性配置，采用信号量模式
+        HystrixCommandProperties.Setter commandProperties = HystrixCommandProperties.Setter()
+                .withExecutionIsolationStrategy(HystrixCommandProperties.ExecutionIsolationStrategy.SEMAPHORE)
+                // 使用一个原子计数器（或信号量）来记录当前有多少个线程在运行，当请求进来时先判断计数器的数值，
+                // 若超过设置的最大线程个数则拒绝该请求，若不超过则通行，这时候计数器+1，请求返回成功后计数器-1。
+                .withExecutionIsolationSemaphoreMaxConcurrentRequests(50);
+        return HystrixCommand.Setter.withGroupKey(groupKey).andCommandPropertiesDefaults(commandProperties);
+    }
+
+    @Override
+    protected JSONObject getFallback() {
+        // 如果Hystrix发生熔断，当前服务不可用，直接执行Fallback方法
+        System.out.println("系统错误！");
+        JSONObject jsonObject = new JSONObject();
+        jsonObject.put("code", 500);
+        jsonObject.put("msg", "系统错误！");
+        return jsonObject;
+    }
+
+}
+```
+
+#### 应用场景
+- 线程池隔离  
+1. 第三方应用或者接口  
+2. 并发量大  
+
+- 信号量隔离
+1. 内部应用或者中间件（redis）  
+2. 并发需求不大   
 
 
+---  
+
+### 高并发服务限流特技  
+在开发高并发系统时有三把利器用来保护系统：缓存、降级和限流。缓存的目的是提升系统访问速度和增大系统能处理的容量，可谓是抗高并发流量的银弹；
+而降级是当服务出问题或者影响到核心流程的性能则需要暂时屏蔽掉，待高峰或者问题解决后再打开；
+而有些场景并不能用缓存和降级来解决，比如稀缺资源（秒杀、抢购）、写服务（如评论、下单）、频繁的复杂查询（评论的最后几页），
+因此需有一种手段来限制这些场景的并发/请求量，即限流。  
+
+#### 互联网雪崩效应解决方案  
+1. 服务降级: 在高并发的情况， 防止用户一直等待，直接返回一个友好的错误提示给客户端。  
+2. 服务熔断：在高并发的情况，一旦达到服务最大的承受极限，直接拒绝访问，使用服务降级。  
+3. 服务隔离: 使用服务隔离方式解决服务雪崩效应。  
+4. 服务限流: 在高并发的情况，一旦服务承受不了使用服务限流机制【计时器（滑动窗口计数）、漏桶算法、令牌桶（Restlimite）】  
+
+#### 高并发限流解决方案  
+高并发限流解决方案限流算法（令牌桶、漏桶、计数器）、应用层解决限流（Nginx） 
+
+#### 限流算法  
+常见的限流算法有：令牌桶、漏桶。计数器也可以进行粗暴限流实现。  
+
+- 计数器  
+
+它是限流算法中最简单最容易的一种算法，比如我们要求某一个接口，1分钟内的请求不能超过10次，我们可以在开始时设置一个计数器，每次请求，该计数器+1；
+如果该计数器的值大于10并且与第一次请求的时间间隔在1分钟内，那么说明请求过多，如果该请求与第一次请求的时间间隔大于1分钟，并且该计数器的值还在限流范围内，那么重置该计数器。  
+
+![IMAGE](resouces/限流算法-计数器.png)  
+
+- 滑动窗口计数  
+
+滑动窗口计数有很多使用场景，比如说限流防止系统雪崩。相比计数实现，滑动窗口实现会更加平滑，能自动消除毛刺。  
+滑动窗口原理是在每次有访问进来时，先判断前 N 个单位时间内的总访问量是否超过了设置的阈值，并对当前时间片上的请求数 +1。  
+
+![IMAGE](resouces/限流算法-滑动窗口计数.png)  
+
+- 令牌桶算法  
+
+令牌桶算法是一个存放固定容量令牌的桶，按照固定速率往桶里添加令牌。令牌桶算法的描述如下：  
+假设限制2r/s，则按照500毫秒的固定速率往桶中添加令牌；  
+桶中最多存放b个令牌，当桶满时，新添加的令牌被丢弃或拒绝；  
+当一个n个字节大小的数据包到达，将从桶中删除n个令牌，接着数据包被发送到网络上；  
+如果桶中的令牌不足n个，则不会删除令牌，且该数据包将被限流（要么丢弃，要么缓冲区等待）。  
+
+![IMAGE](resouces/限流算法-令牌桶.png)  
+
+> 示例项目： guava-ratelimiter  
+
+- 漏桶算法  
+
+漏桶作为计量工具（The Leaky Bucket Algorithm as a Meter）时，可以用于流量整形（Traffic Shaping）和流量控制（TrafficPolicing），漏桶算法的描述如下：  
+一个固定容量的漏桶，按照常量固定速率流出水滴；  
+如果桶是空的，则不需流出水滴；  
+可以以任意速率流入水滴到漏桶；  
+如果流入水滴超出了桶的容量，则流入的水滴溢出了（被丢弃），而漏桶容量是不变的。  
+
+![IMAGE](resouces/限流算法-漏桶.png)  
+
+- 令牌桶和漏桶对比  
+令牌桶是按照固定速率往桶中添加令牌，请求是否被处理需要看桶中令牌是否足够，当令牌数减为零时则拒绝新的请求；  
+漏桶则是按照常量固定速率流出请求，流入请求速率任意，当流入的请求数累积到漏桶容量时，则新流入的请求被拒绝；  
+令牌桶限制的是平均流入速率（允许突发请求，只要有令牌就可以处理，支持一次拿3个令牌，4个令牌），并允许一定程度突发流量；  
+漏桶限制的是常量流出速率（即流出速率是一个固定常量值，比如都是1的速率流出，而不能一次是1，下次又是2），从而平滑突发流入速率；  
+令牌桶允许一定程度的突发，而漏桶主要目的是平滑流入速率；  
+两个算法实现可以一样，但是方向是相反的，对于相同的参数得到的限流效果是一样的。  
+另外有时候我们还使用计数器来进行限流，主要用来限制总并发数，比如数据库连接池、线程池、秒杀的并发数；
+只要全局总请求数或者一定时间段的总请求数设定的阀值则进行限流，是简单粗暴的总数量限流，而不是平均速率限流。  
 
 
+#### 应用级限流  
+
+- 限流总并发/连接/请求数  
+
+对于一个应用系统来说一定会有极限并发/请求数，即总有一个TPS/QPS阀值，如果超了阀值则系统就会不响应用户请求或响应的非常慢，因此我们最好进行过载保护，防止大量请求涌入击垮系统。  
+如果你使用过Tomcat，其Connector其中一种配置有如下几个参数：  
+acceptCount：如果Tomcat的线程都忙于响应，新来的连接会进入队列排队，如果超出排队大小，则拒绝连接；  
+maxConnections：瞬时最大连接数，超出的会排队等待；  
+maxThreads：Tomcat能启动用来处理请求的最大线程数，如果请求处理量一直远远大于最大线程数则可能会僵死。  
+详细的配置请参考官方文档。另外如MySQL（如max_connections）、Redis（如tcp-backlog）都会有类似的限制连接数的配置。  
+
+- 限流总资源数  
+
+如果有的资源是稀缺资源（如数据库连接、线程），而且可能有多个系统都会去使用它，那么需要限制应用；可以使用池化技术来限制总资源数：连接池、线程池。
+比如分配给每个应用的数据库连接是100，那么本应用最多可以使用100个资源，超出了可以等待或者抛异常。  
+
+- 限流某个接口的总并发/请求数  
+
+如果接口可能会有突发访问情况，但又担心访问量太大造成崩溃，如抢购业务；这个时候就需要限制这个接口的总并发/请求数总请求数了；
+因为粒度比较细，可以为每个接口都设置相应的阀值。可以使用Java中的AtomicLong进行限流。  
+适合对业务无损的服务或者需要过载保护的服务进行限流，如抢购业务，超出了大小要么让用户排队，要么告诉用户没货了，对用户来说是可以接受的。
+而一些开放平台也会限制用户调用某个接口的试用请求量，也可以用这种计数器方式实现。这种方式也是简单粗暴的限流，没有平滑处理，需要根据实际情况选择使用。  
+
+- 限流某个接口的时间窗请求数  
+
+即一个时间窗口内的请求数，如想限制某个接口/服务每秒/每分钟/每天的请求数/调用量。如一些基础服务会被很多其他系统调用，
+比如商品详情页服务会调用基础商品服务调用，但是怕因为更新量比较大将基础服务打挂，这时我们要对每秒/每分钟的调用量进行限速。  
+
+- 平滑限流某个接口的请求数  
+
+之前的限流方式都不能很好地应对突发请求，即瞬间请求可能都被允许从而导致一些问题；因此在一些场景中需要对突发请求进行整形，整形为平均速率请求处理（比如5r/s，则每隔200毫秒处理一个请求，平滑了速率）。
+这个时候有两种算法满足我们的场景：令牌桶和漏桶算法。Guava框架提供了令牌桶算法实现，可直接拿来使用。  
+Guava RateLimiter提供了令牌桶算法实现：平滑突发限流（SmoothBursty）和平滑预热限流（SmoothWarmingUp）实现。  
 
 
+#### 接入层限流  
+
+接入层通常指请求流量的入口，该层的主要目的有：负载均衡、非法请求过滤、请求聚合、缓存、降级、限流、A/B测试、服务质量监控等等。参考书《使用Nginx+Lua(OpenResty)开发高性能Web应用》  
+对于Nginx接入层限流可以使用Nginx自带了两个模块：连接数限流模块ngx_http_limit_conn_module和漏桶算法实现的请求限流模块ngx_http_limit_req_module。
+还可以使用OpenResty提供的Lua限流模块lua-resty-limit-traffic进行更复杂的限流场景。  
+limit_conn用来对某个KEY对应的总的网络连接数进行限流，可以按照如IP、域名维度进行限流。limit_req用来对某个KEY对应的请求的平均速率进行限流，并有两种用法：平滑模式（delay）和允许突发模式(nodelay)。  
+
+ngx_http_limit_conn_module：  
+limit_conn是对某个KEY对应的总的网络连接数进行限流。可以按照IP来限制IP维度的总连接数，或者按照服务域名来限制某个域名的总连接数。
+但是记住不是每一个请求连接都会被计数器统计，只有那些被Nginx处理的且已经读取了整个请求头的请求连接才会被计数器统计。  
 
 
+--- 
+
+### CDN内容分发  
+
+#### 传统方式请求静态资源  
+1. 带宽传输压力大  
+2. 因为所有用户全部聚集到同一个地区服务器上访问，无法保证整体的系统高可用  
+3. 因为如果客户端与服务器端传输距离越远，那么宽带传输非常耗资源，导致用户体验非常差，响应慢。  
+
+#### CDN  
+CDN加速意思就是在用户和我们的服务器之间加一个缓存机制，动态获取IP地址，根据地理位置让用户到最近的服务器访问。  
+CDN的全称是Content Delivery Network，即内容分发网络。  
+CDN是一组分布在多个不同地理位置的Web服务器，用于更加有效地向用户发布内容，在优化性能时，会根据距离的远近来选择。  
+CDN系统能实时地根据网络流量和各节点的连接，负载状况及用户的距离和响应时间等综合信息将用户的请求重新导向离用户最近的服务节点上，
+其目的是使用户能就近地获取请求数据，解决网络拥塞，提高访问速度，解决由于网络带宽小、用户访问量大、网点分布不均等原因导致的访问速度慢的问题。  
+由于CDN部署在网络运营商的机房，这些运营商又是终端用户网络的提供商，因此用户请求的第一跳就到达CDN服务器，当CDN服务器中缓存有用户请求的数据时，就可以从CDN直接返回给浏览器，因此可以提高访问速度。  
+CDN能够缓存JavaScript脚本、CSS样式表、图片、图标、Flash等静态资源文件（不包括html页面），这些静态资源文文件的访问频率很高，将其缓存在CDN可以极大地提高网站的访问速度，
+但由于CDN是部署在网络运营商的机房，所以在一般的网站中都很少用CDN加速。  
+
+#### CDN内容分发原理  
+1. 用户向浏览器提供要访问的域名；  
+2. 浏览器调用域名解析库对域名进行解析，由于CDN对域名解析过程进行了调整，所以解析函数库一般得到的是该域名对应的CNAME记录，
+为了得到实际IP地址，浏览器需要再次对获得的CNAME域名进行解析以得到实际的IP地址；在此过程中，使用的全局负载均衡DNS解析，如根据地理位置信息解析对应的IP地址，使得用户能就近访问；  
+3. 此次解析得到CDN缓存服务器的IP地址，浏览器在得到实际的IP地址以后，向缓存服务器发出访问请求；  
+4. 缓存服务器根据浏览器提供的要访问的域名，通过Cache内部专用DNS解析得到此域名的实际IP地址，再由缓存服务器向此实际IP地址提交访问请求；  
+5. 缓存服务器从实际IP地址得得到内容以后，一方面在本地进行保存，以备以后使用，二方面把获取的数据返回给客户端，完成数据服务过程；  
+6. 客户端得到由缓存服务器返回的数据以后显示出来并完成整个浏览的数据请求过程。  
+
+#### 阿里云环境实战搭建CDN内容分发  
+1. 阿里云全站CDN后台管理页面  
+https://dcdn.console.aliyun.com/?spm=5176.8232187.domainlist.2.1afb142fNzk20a#/overview  
+2. 阿里云CDN帮助文档  
+https://help.aliyun.com/document_detail/27101.html?spm=a2c4g.11174283.6.539.NPTXlI  
 
 
+#### 名词解释  
 
+- CNAME记录（CNAME Record）  
 
+CNAME即别名( Canonical Name )；可以用来把一个域名解析到另一个域名。当 DNS 系统在查询 CNAME 左面的名称的时候，
+都会转向 CNAME 右面的名称再进行查询，一直追踪到最后的 PTR 或 A 名称，成功查询后才会做出回应，否则失败。
+例如，你有一台服务器上存放了很多资料，你使用docs.example.com去访问这些资源，但又希望通过documents.example.com也能访问到这些资源，
+那么你就可以在您的DNS解析服务商添加一条CNAME记录，将documents.example.com指向docs.example.com，添加该条CNAME记录后，
+所有访问documents.example.com的请求都会被转到docs.example.com，获得相同的内容。  
 
+- CNAME域名  
 
+接入CDN时，在阿里云控制台添加完加速域名后，您会得到一个阿里云CDN给您分配的CNAME域名，（该CNAME域名一定是```*.*kunlun*.com```），
+您需要在您的DNS解析服务商添加CNAME记录，将自己的加速域名指向这个```*.*kunlun*.com```的CNAME域名，这样该域名所有的请求才会都将转向阿里云CDN的节点，达到加速效果。  
+详细参考地址: https://help.aliyun.com/document_detail/27102.html?spm=a2c4g.11186623.6.544.ERnv0c  
 
+- DNS域名解析  
 
-
-
-
-
- 
-
-
-
-
+DNS即Domain Name System，是域名解析服务的意思。它在互联网的作用是：把域名转换成为网络可以识别的ip地址。
+人们习惯记忆域名，但机器间互相只认IP地址，域名与IP地址之间是一一对应的，它们之间的转换工作称为域名解析，域名解析需要由专门的域名解析服务器来完成，整个过程是自动进行的。
+比如：上网时输入的www.baidu.com会自动转换成为220.181.112.143。  
+常见的DNS解析服务商有：阿里云解析，万网解析，DNSPod，新网解析，Route53（AWS），Dyn，Cloudflare等。  
 
 
 --- 
@@ -1428,66 +1731,5 @@ http {
 - 可伸缩
 - 敏捷迭代
 - 无状态
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 

@@ -21,6 +21,9 @@
 
     <modules>
         <module>springboot-nginx</module>
+        <module>hystrix-order</module>
+        <module>hystrix-member</module>
+        <module>guava-ratelimiter</module>
     </modules>
 
     <dependencies>
